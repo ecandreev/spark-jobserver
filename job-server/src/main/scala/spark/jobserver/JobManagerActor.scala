@@ -25,7 +25,8 @@ object JobManagerActor {
   // Messages
   case class Initialize(resultActorOpt: Option[ActorRef])
   case class StartJob(appName: String, classPath: String, config: Config,
-                      subscribedEvents: Set[Class[_]])
+                      subscribedEvents: Set[Class[_]], oldJobInfo: Option[JobInfo] = None)
+
   case class KillJob(jobId: String)
   case class JobKilledException(jobId: String) extends Exception(s"Job $jobId killed")
   case class ContextTerminatedException(contextName: String)
@@ -158,7 +159,7 @@ class JobManagerActor(contextConfig: Config, daoActor: ActorRef)
           self ! PoisonPill
       }
 
-    case StartJob(appName, classPath, jobConfig, events) => {
+    case StartJob(appName, classPath, jobConfig, events, oldJobInfo) => {
       val loadedJars = jarLoader.getURLs
       getSideJars(jobConfig).foreach { jarUri =>
         val jarToLoad = new URL(convertJarUriSparkToJava(jarUri))
@@ -168,7 +169,7 @@ class JobManagerActor(contextConfig: Config, daoActor: ActorRef)
           jobContext.sparkContext.addJar(jarUri)
         }
       }
-      startJobInternal(appName, classPath, jobConfig, events, jobContext, sparkEnv)
+      startJobInternal(appName, classPath, jobConfig, events, jobContext, sparkEnv, oldJobInfo)
     }
 
     case KillJob(jobId: String) => {
@@ -216,7 +217,7 @@ class JobManagerActor(contextConfig: Config, daoActor: ActorRef)
                        jobConfig: Config,
                        events: Set[Class[_]],
                        jobContext: ContextLike,
-                       sparkEnv: SparkEnv): Option[Future[Any]] = {
+                       sparkEnv: SparkEnv, oldJobInfo: Option[JobInfo]): Option[Future[Any]] = {
     import akka.pattern.ask
     import akka.util.Timeout
     import spark.jobserver.context._
@@ -241,7 +242,12 @@ class JobManagerActor(contextConfig: Config, daoActor: ActorRef)
     if (!lastUploadTimeAndType.isDefined) return failed(NoSuchApplication)
     val (lastUploadTime, binaryType) = lastUploadTimeAndType.get
 
-    val jobId = java.util.UUID.randomUUID().toString()
+    val (jobId, startDateTime) = oldJobInfo match {
+      case Some(info: JobInfo) => (info.jobId, info.startTime)
+      case None => (java.util.UUID.randomUUID().toString(), DateTime.now())
+    }
+    logger.info("Starting job with id: {}", jobId)
+
     val jobContainer = factory.loadAndValidateJob(appName, lastUploadTime,
                                                   classPath, jobCache) match {
       case Good(container) => container
@@ -255,7 +261,7 @@ class JobManagerActor(contextConfig: Config, daoActor: ActorRef)
     statusActor ! Subscribe(jobId, sender, events)
 
     val binInfo = BinaryInfo(appName, binaryType, lastUploadTime)
-    val jobInfo = JobInfo(jobId, contextName, binInfo, classPath, DateTime.now(), None, None)
+    val jobInfo = JobInfo(jobId, contextName, binInfo, classPath, startDateTime, None, None)
 
     Some(getJobFuture(jobContainer, jobInfo, jobConfig, sender, jobContext, sparkEnv))
   }

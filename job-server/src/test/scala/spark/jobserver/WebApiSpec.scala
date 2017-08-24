@@ -166,13 +166,13 @@ with ScalatestRouteTest with HttpService with ScalaFutures with SprayJsonSupport
       case StartAdHocContext(_, _) => sender ! (self, self)
 
       // These routes are part of JobManagerActor
-      case StartJob("no-app", _, _, _)   =>  sender ! NoSuchApplication
-      case StartJob(_, "no-class", _, _) =>  sender ! NoSuchClass
-      case StartJob("wrong-type", _, _, _) => sender ! WrongJobType
-      case StartJob("err", _, config, _) =>  sender ! JobErroredOut("foo", dt,
+      case StartJob("no-app", _, _, _, _)   =>  sender ! NoSuchApplication
+      case StartJob(_, "no-class", _, _, _) =>  sender ! NoSuchClass
+      case StartJob("wrong-type", _, _, _, _) => sender ! WrongJobType
+      case StartJob("err", _, config, _, _) =>  sender ! JobErroredOut("foo", dt,
                                                         new RuntimeException("oops",
                                                           new IllegalArgumentException("foo")))
-      case StartJob("foo", _, config, events)     =>
+      case StartJob("foo", _, config, events, _)     =>
         statusActor ! Subscribe("foo", sender, events)
         val jobInfo = JobInfo("foo", "context", null, "com.abc.meme", dt, None, None)
         statusActor ! JobStatusActor.JobInit(jobInfo)
@@ -181,7 +181,7 @@ with ScalatestRouteTest with HttpService with ScalaFutures with SprayJsonSupport
         if (events.contains(classOf[JobResult])) sender ! JobResult("foo", map)
         statusActor ! Unsubscribe("foo", sender)
 
-      case StartJob("foo.stream", _, config, events)     =>
+      case StartJob("foo.stream", _, config, events, _)     =>
         statusActor ! Subscribe("foo.stream", sender, events)
         val jobInfo = JobInfo("foo.stream", "context", null, "", dt, None, None)
         statusActor ! JobStatusActor.JobInit(jobInfo)

@@ -316,6 +316,31 @@ class JobSqlDAO(config: Config) extends JobDAO with FileCacher {
     }
   }
 
+  override def getLastJobInfoForContextName(contextName: String): Future[Option[JobInfo]] = {
+    val joinQuery = for {
+      bin <- binaries
+      j <- jobs if (j.binId === bin.binId && j.contextName === contextName)
+    } yield {
+      (j.jobId, j.contextName, bin.appName, bin.binaryType,
+        bin.uploadTime, j.classPath, j.startTime, j.endTime, j.error)
+    }
+    val sortQuery = joinQuery.sortBy(_._8.desc)
+    val limitQuery = sortQuery.take(1)
+    // Transform each row of the table into a map of JobInfo values
+    for (r <- db.run(limitQuery.result)) yield {
+      r.map { case (id, context, app, binType, upload, classpath, start, end, err) =>
+        JobInfo(
+          id,
+          context,
+          BinaryInfo(app, BinaryType.fromString(binType), convertDateSqlToJoda(upload)),
+          classpath,
+          convertDateSqlToJoda(start),
+          end.map(convertDateSqlToJoda),
+          err.map(new Throwable(_)))
+      }.headOption
+    }
+  }
+
   /**
     * Return all job ids to their job info.
     *

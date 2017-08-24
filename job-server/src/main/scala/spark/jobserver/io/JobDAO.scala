@@ -126,6 +126,13 @@ trait JobDAO {
    */
   def getJobInfos(limit: Int, status: Option[String] = None): Future[Seq[JobInfo]]
 
+    /**
+   * Return last job info for a specific context.
+   *
+   * @return
+   */
+  def getLastJobInfoForContextName(contextName: String): Future[Option[JobInfo]]
+
   /**
     * Return all job ids to their job info.
     */

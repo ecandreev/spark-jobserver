@@ -2,6 +2,8 @@ package spark.jobserver.util
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectInputStream, ObjectOutputStream}
 
+import spark.jobserver.io.JobInfo
+
 import akka.serialization.JSerializer
 import com.typesafe.config.{Config, ConfigFactory, ConfigRenderOptions}
 import spark.jobserver.JobManagerActor.StartJob
@@ -28,6 +30,7 @@ class StartJobSerializer extends JSerializer {
       out.writeObject(startJob.classPath)
       out.writeObject(startJob.config.root().render(ConfigRenderOptions.concise()))
       out.writeObject(startJob.subscribedEvents)
+      out.writeObject(startJob.oldJobInfo)
       out.flush()
       byteArray.toByteArray
     } catch {
@@ -47,11 +50,12 @@ class StartJobSerializer extends JSerializer {
       val classPath = inputStream.readObject().asInstanceOf[String]
       val configString = inputStream.readObject().asInstanceOf[String]
       val subscribedEvents = inputStream.readObject().asInstanceOf[Set[Class[_]]]
+      val jobInfo = inputStream.readObject().asInstanceOf[Option[JobInfo]]
       logger.debug(s"appname: ${appName}")
       logger.debug(s"classPath: ${classPath}")
       logger.debug(s"configString: ${configString}")
       logger.debug(s"subscribedEvents: ${subscribedEvents}")
-      StartJob(appName, classPath, ConfigFactory.parseString(configString), subscribedEvents)
+      StartJob(appName, classPath, ConfigFactory.parseString(configString), subscribedEvents, jobInfo)
     } catch {
       case ex: Exception =>
         throw new IllegalArgumentException(s"Object of unknown class cannot be deserialized " +

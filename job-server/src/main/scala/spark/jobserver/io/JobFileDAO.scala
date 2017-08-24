@@ -208,6 +208,10 @@ class JobFileDAO(config: Config) extends JobDAO {
     filterJobs.take(limit)
   }
 
+  override def getLastJobInfoForContextName(contextName: String): Future[Option[JobInfo]] = {
+    throw new NotImplementedError;
+  }
+
   override def getRunningJobInfosForContextName(contextName: String): Future[Seq[JobInfo]] = Future {
     jobs.values.toSeq.filter(j => j.endTime.isEmpty && j.error.isEmpty && j.contextName == contextName)
   }

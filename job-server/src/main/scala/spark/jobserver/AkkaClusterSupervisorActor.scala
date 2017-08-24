@@ -9,7 +9,7 @@ import akka.actor._
 import akka.cluster.Cluster
 import akka.cluster.ClusterEvent.{InitialStateAsEvents, MemberEvent, MemberUp}
 import akka.util.Timeout
-import com.typesafe.config.{Config, ConfigFactory, ConfigRenderOptions}
+import com.typesafe.config.{Config, ConfigException, ConfigFactory, ConfigRenderOptions}
 import spark.jobserver.util.SparkJobUtils
 
 import scala.collection.mutable
@@ -21,6 +21,10 @@ import scala.concurrent.Await
 import akka.pattern.gracefulStop
 import org.joda.time.DateTime
 import spark.jobserver.io.JobDAOActor.CleanContextJobInfos
+
+import spark.jobserver.io.JobDAOActor
+import spark.jobserver.io.JobDAOActor.JobConfig
+import spark.jobserver.io.JobInfo
 
 /**
  * The AkkaClusterSupervisorActor launches Spark Contexts as external processes
@@ -45,12 +49,13 @@ class AkkaClusterSupervisorActor(daoActor: ActorRef) extends InstrumentedActor {
   import ContextSupervisor._
   import scala.collection.JavaConverters._
   import scala.concurrent.duration._
-
+  implicit val daoAskTimeout = Timeout(60 seconds)
   val config = context.system.settings.config
   val defaultContextConfig = config.getConfig("spark.context-settings")
   val contextInitTimeout = config.getDuration("spark.context-settings.context-init-timeout",
                                                 TimeUnit.SECONDS)
   val contextDeletionTimeout = SparkJobUtils.getContextDeletionTimeout(config)
+  val contextTimeout = SparkJobUtils.getContextCreationTimeout(config)
   val managerStartCommand = config.getString("deploy.manager-start-cmd")
   val waitForManagerStart = config.getBoolean("deploy.wait-for-manager-start")
   import context.dispatcher
@@ -95,7 +100,7 @@ class AkkaClusterSupervisorActor(daoActor: ActorRef) extends InstrumentedActor {
         val actorName = actorRef.path.name
         if (actorName.startsWith("jobManager")) {
           logger.info("Received identify response, attempting to initialize context at {}", memberActors)
-          (for { (isAdHoc, successFunc, failureFunc) <- contextInitInfos.remove(actorName) }
+          (for { (isAdHoc, successFunc, failureFunc) <- contextInitInfos.get(actorName) }
            yield {
              initContext(actorName, actorRef, contextInitTimeout)(isAdHoc, successFunc, failureFunc)
            }).getOrElse({
@@ -207,10 +212,88 @@ class AkkaClusterSupervisorActor(daoActor: ActorRef) extends InstrumentedActor {
         contexts(ctxName) = (ref, resActor)
         context.watch(ref)
         successFunc(ref)
+
+        restartLastTerminatedJob(ctxName)
       case _ => logger.info("Failed for unknown reason.")
         cluster.down(ref.path.address)
         ref ! PoisonPill
         failureFunc(new RuntimeException("Failed for unknown reason."))
+    }
+  }
+
+  private def restartLastTerminatedJob(ctxName: String) {
+    import akka.pattern.ask
+    val jobInfoLatestFuture = (daoActor ? JobDAOActor.GetLastJobInfoForContextName(ctxName))
+
+    val jobInfoLatestResult = Await.result(jobInfoLatestFuture, 5 seconds)
+    jobInfoLatestResult match {
+      case Some(jobInfo: JobInfo) =>
+        jobInfo.error match {
+          case Some(e: Throwable) => {
+            if (e.getMessage().equals("Unexpected termination of context " + jobInfo.contextName.trim())) {
+              logger.info("Restarting last unexpectedly terminated job in context {}.",
+                  jobInfo.contextName.trim())
+
+              val configForJobFuture = (daoActor ? JobDAOActor.GetJobConfig(jobInfo.jobId))
+              val configForJobResult = Await.result(configForJobFuture, 5 seconds).asInstanceOf[JobConfig]
+
+              restartJob(jobInfo, configForJobResult)
+            }
+          }
+          case _ => {
+            logger.debug("Job is still running. No need to restart anything.")
+          }
+        }
+      case _ =>
+        logger.debug("No job found which was terminated unexpectedly. Not restarting any job.")
+    }
+  }
+
+  private def restartJob(oldJobInfo: JobInfo, oldJobConfig: JobConfig) {
+    try {
+      import akka.pattern.ask
+      import collection.JavaConverters.mapAsJavaMapConverter
+      import CommonMessages._
+      import scala.util._
+
+      val jobConfig = oldJobConfig.jobConfig.get.withFallback(config).resolve()
+
+      val json = jobConfig.root().render(ConfigRenderOptions.concise())
+      logger.info("Restarting with config {}", json)
+
+      val contextConfig = Try(jobConfig.getConfig("spark.context-settings"))
+          .getOrElse(ConfigFactory.empty)
+          .resolve()
+      val jobManager = getJobManagerForContext(oldJobInfo.contextName)
+      val events: Set[Class[_]] = Set(classOf[JobStarted]) ++
+          Set(classOf[JobErroredOut], classOf[JobValidationFailed])
+      logger.info("Restarting job with jobId {}", oldJobInfo.jobId)
+      val oldJobFuture = jobManager.get ? JobManagerActor.StartJob(oldJobInfo.binaryInfo.appName,
+          oldJobInfo.classPath, jobConfig, events, Some(oldJobInfo))
+      val oldJobResult = Await.ready(oldJobFuture, 10 seconds).value.get
+      oldJobResult match {
+        case Failure(e) => logger.error("ERROR", e)
+        case Success(s) => logger.info("Job {} restarted", oldJobInfo.jobId)
+      }
+    } catch {
+      case e: NoSuchElementException =>
+        logger.error("context {} not found", oldJobInfo.contextName)
+      case e: ConfigException =>
+        logger.error("Cannot parse config: {}", e.getMessage)
+      case e: Exception =>
+        logger.error("ERROR", e)
+    }
+  }
+
+  private def getJobManagerForContext(context: String): Option[ActorRef] = {
+    import akka.pattern.ask
+    import ContextSupervisor._
+    val msg = GetContext(context)
+    val future = (self ? msg)(contextTimeout.seconds)
+    Await.result(future, contextTimeout.seconds) match {
+      case (manager: ActorRef, resultActor: ActorRef) => Some(manager)
+      case NoSuchContext => None
+      case ContextInitError(err) => throw new RuntimeException(err)
     }
   }
 

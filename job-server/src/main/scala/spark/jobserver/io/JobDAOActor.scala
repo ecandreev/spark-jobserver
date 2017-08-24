@@ -34,6 +34,7 @@ object JobDAOActor {
 
   case class SaveJobInfo(jobInfo: JobInfo) extends JobDAORequest
   case class GetJobInfos(limit: Int) extends JobDAORequest
+  case class GetLastJobInfoForContextName(contextName: String) extends JobDAORequest
 
   case class SaveJobConfig(jobId: String, jobConfig: Config) extends JobDAORequest
   @deprecated("Leads to performance problems and OutOfMemory error ultimately", "0.7.1")
@@ -49,6 +50,7 @@ object JobDAOActor {
   case class BinaryPath(binPath: String) extends JobDAOResponse
   case class BinaryContent(content: Array[Byte]) extends JobDAOResponse
   case class JobInfos(jobInfos: Seq[JobInfo]) extends JobDAOResponse
+  case class JobInfoByContext(jobInfo: Option[JobInfo]) extends JobDAOResponse
   case class JobConfigs(jobConfigs: Map[String, Config]) extends JobDAOResponse
   case class JobConfig(jobConfig: Option[Config]) extends JobDAOResponse
   case class LastUploadTimeAndType(uploadTimeAndType: Option[(DateTime, BinaryType)]) extends JobDAOResponse
@@ -85,6 +87,9 @@ class JobDAOActor(dao: JobDAO) extends InstrumentedActor {
 
     case GetJobInfos(limit) =>
       dao.getJobInfos(limit).map(JobInfos).pipeTo(sender)
+
+    case GetLastJobInfoForContextName(contextName) =>
+      dao.getLastJobInfoForContextName(contextName).pipeTo(sender)
 
     case SaveJobConfig(jobId, jobConfig) =>
       dao.saveJobConfig(jobId, jobConfig)

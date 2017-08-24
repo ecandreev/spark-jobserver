@@ -22,6 +22,7 @@ import scala.concurrent.{Await, Future}
 import spark.jobserver.cassandra.Cassandra.Resultset.toFuture
 
 import scala.util.Try
+import org.apache.commons.lang3.NotImplementedException
 
 object Metadata {
   val BinariesTable = "binaries"
@@ -175,6 +176,10 @@ class JobCassandraDAO(config: Config) extends JobDAO with FileCacher {
         case _ => allJobs
       }
     }
+  }
+
+  override def getLastJobInfoForContextName(contextName: String): Future[Option[JobInfo]] = {
+    throw new NotImplementedError;
   }
 
   override def getRunningJobInfosForContextName(contextName: String): Future[Seq[JobInfo]] = {
