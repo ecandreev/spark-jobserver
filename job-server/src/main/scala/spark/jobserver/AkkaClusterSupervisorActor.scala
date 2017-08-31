@@ -319,8 +319,13 @@ class AkkaClusterSupervisorActor(daoActor: ActorRef) extends InstrumentedActor {
       s"$managerStartCommand $driverMode $workDir $contextContent ${selfAddress.toString}"
     }
 
+    if (contextConfig.hasPath("supervise-mode") && contextConfig.getString("supervise-mode") == "on") {
+      cmdString = cmdString + s" --supervise on"
+    }
+
     if (contextConfig.hasPath(SparkJobUtils.SPARK_PROXY_USER_PARAM)) {
-      cmdString = cmdString + s"--proxy_user ${contextConfig.getString(SparkJobUtils.SPARK_PROXY_USER_PARAM)}"
+      cmdString = cmdString +
+        s" --proxy_user ${contextConfig.getString(SparkJobUtils.SPARK_PROXY_USER_PARAM)}"
     }
 
     val pb = Process(cmdString)
